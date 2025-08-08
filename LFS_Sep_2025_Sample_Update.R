@@ -26,6 +26,20 @@ db_password <- Sys.getenv("DB_PASSWORD")
 db_table <- Sys.getenv("DB_TABLE")
 sav_path <- Sys.getenv("SAV_PATH")
 
+
+# Sys.getenv("DB_NAME")
+# Sys.getenv("DB_HOST")
+# Sys.getenv("DB_USER")
+# Sys.getenv("DB_PASSWORD")
+# 
+# cat("Connecting with:\n")
+# cat("Host: ", db_host, "\n")
+# cat("Port: ", db_port, "\n")
+# cat("DB: ", db_name, "\n")
+# cat("User: ", db_user, "\n")
+
+
+
 # ------------------------------
 # Read SAV File
 # ------------------------------
@@ -45,14 +59,29 @@ cat("Unique records in SAV file: ", n_distinct(sav_data$concat_key), "\n")
 # Connect to PostgreSQL
 # ------------------------------
 cat("Connecting to PostgreSQL...\n")
-conn <- dbConnect(
-  RPostgres::Postgres(),
-  host = db_host,
-  port = db_port,
-  dbname = db_name,
-  user = db_user,
-  password = db_password
-)
+conn <- tryCatch({
+  dbConnect(
+    RPostgres::Postgres(),
+    host = db_host,
+    port = db_port,
+    dbname = db_name,
+    user = db_user,
+    password = db_password
+  )
+},error = function(e) {
+  cat("❌ Connection error: ", conditionMessage(e), "\n")
+  return(NULL)
+})
+  
+  
+
+
+# if (DBI::dbIsValid(conn)) {
+#   cat("✅ Connected to the database.\n")
+# } else {
+#   cat("❌ Failed to connect to the database.\n")
+# }
+
 
 # ------------------------------
 # Read from Database
@@ -88,7 +117,7 @@ cat("Updating matched records...\n")
 update_query <- glue("
 UPDATE {db_table}
 SET sampled='1'
-WHERE interview_key=$1 AND ed_2022=$2;
+WHERE interview__key=$1 AND ed_2022=$2;
 ")
 
 # update_query <- glue(
@@ -97,18 +126,23 @@ WHERE interview_key=$1 AND ed_2022=$2;
 #                      WHERE interview__key = $1 AND ed_2022 = $2;
 #                      ")
 
-dbBegin(conn)
 
 for (i in 1:nrow(matched)) {
   row <- matched[i, ]
   tryCatch({
+    dbBegin(conn)
+    
     dbExecute(conn, update_query, params = list(row$interview__key, row$ed_2022))
+    
+    dbCommit(conn)
   }, error = function(e) {
-    cat("Error updating row ", i, ": ", e$message, "\n")
+    dbRollback(conn)  # <- Roll back this one row if failed
+    cat("Error updating row", i, ":", conditionMessage(e), "\n")
   })
 }
 
-dbCommit(conn)
+
+
 
 cat("Update complete!\n")
 
