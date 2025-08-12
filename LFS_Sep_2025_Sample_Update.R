@@ -27,6 +27,8 @@ db_table <- Sys.getenv("DB_TABLE")
 sav_path <- Sys.getenv("SAV_PATH")
 
 
+# Code to check in the .env file is being read from
+
 # Sys.getenv("DB_NAME")
 # Sys.getenv("DB_HOST")
 # Sys.getenv("DB_USER")
@@ -74,7 +76,7 @@ conn <- tryCatch({
 })
   
   
-
+#Code just to check if there is a connection to the database
 
 # if (DBI::dbIsValid(conn)) {
 #   cat("✅ Connected to the database.\n")
@@ -107,7 +109,7 @@ cat("Matched records: ", nrow(matched), "\n")
 cat("Unmatched records: ", nrow(unmatched), "\n")
 
 # Optional: Save unmatched to CSV
-# write_csv(unmatched, "unmatched_records.csv")
+ write_csv(unmatched, "unmatched_records.csv")
 
 # ------------------------------
 # Update Sampled Flag in DB
@@ -127,19 +129,34 @@ WHERE interview__key=$1 AND ed_2022=$2;
 #                      ")
 
 
+updated_rows <- list()  # For tracking successful updates
+
+dbBegin(conn)
+
 for (i in 1:nrow(matched)) {
   row <- matched[i, ]
   tryCatch({
-    dbBegin(conn)
-    
     dbExecute(conn, update_query, params = list(row$interview__key, row$ed_2022))
     
-    dbCommit(conn)
+    # ✅ Log success message
+    cat(glue("✅ Updated: interview__key = {row$interview__key}, ed_2022 = {row$ed_2022}\n"))
+    
   }, error = function(e) {
-    dbRollback(conn)  # <- Roll back this one row if failed
-    cat("Error updating row", i, ":", conditionMessage(e), "\n")
+    cat(glue("❌ Error updating row {i}: {e$message}\n"))
   })
 }
+
+dbCommit(conn)
+
+# ✅ Convert list to data frame and save as CSV
+if (length(updated_rows) > 0) {
+  updated_df <- dplyr::bind_rows(updated_rows)
+  readr::write_csv(updated_df, "updated_records.csv")
+  cat(glue("✅ Total updated records: {nrow(updated_df)}\n"))
+} else {
+  cat("⚠️ No records were successfully updated.\n")
+}
+
 
 
 
