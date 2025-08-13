@@ -1,12 +1,12 @@
-# ------------------------------
+# ------------------------------------------------
 # R Script to Assign Samples from SAV to Postgres
-# ------------------------------
+# ------------------------------------------------
 
 # Load Libraries
 library(haven)        # For reading SAV
 library(DBI)          # Database interface
 library(RPostgres)    # PostgreSQL driver
-library(rpostgis)
+library(rpostgis)     # Postgis driver
 library(dplyr)        # Data manipulation
 library(glue)         # For string interpolation
 library(readr)        # Optional for CSV export
@@ -26,9 +26,9 @@ db_password <- Sys.getenv("DB_PASSWORD")
 db_table <- Sys.getenv("DB_TABLE")
 sav_path <- Sys.getenv("SAV_PATH")
 
-
+#--------------------------------------------------------
 # Code to check in the .env file is being read from
-
+#--------------------------------------------------------
 # Sys.getenv("DB_NAME")
 # Sys.getenv("DB_HOST")
 # Sys.getenv("DB_USER")
@@ -60,6 +60,7 @@ cat("Unique records in SAV file: ", n_distinct(sav_data$concat_key), "\n")
 # ------------------------------
 # Connect to PostgreSQL
 # ------------------------------
+
 cat("Connecting to PostgreSQL...\n")
 conn <- tryCatch({
   dbConnect(
@@ -75,8 +76,9 @@ conn <- tryCatch({
   return(NULL)
 })
   
-  
+#---------------------------------------------------------------- 
 #Code just to check if there is a connection to the database
+#----------------------------------------------------------------
 
 # if (DBI::dbIsValid(conn)) {
 #   cat("✅ Connected to the database.\n")
@@ -88,6 +90,7 @@ conn <- tryCatch({
 # ------------------------------
 # Read from Database
 # ------------------------------
+
 cat("Fetching DB data...\n")
 query <- glue("SELECT interview__key, ed_2022, blk_newn_2022, bldg_newn FROM {db_table};")
 db_data <- dbGetQuery(conn, query) %>%
@@ -96,20 +99,110 @@ db_data <- dbGetQuery(conn, query) %>%
   )
 
 # ------------------------------
-# Match & Filter
+# Match & Filter Surveys Database
 # ------------------------------
+
 cat("Matching records...\n")
-matched <- sav_data %>%
+surveys_matched <- sav_data %>%
   filter(concat_key %in% db_data$concat_key)
 
-unmatched <- sav_data %>%
+surveys_unmatched <- sav_data %>%
   filter(!concat_key %in% db_data$concat_key)
 
-cat("Matched records: ", nrow(matched), "\n")
-cat("Unmatched records: ", nrow(unmatched), "\n")
+cat("surveys_matched records: ", nrow(surveys_matched), "\n")
+cat("surveys_unmatched records: ", nrow(surveys_unmatched), "\n")
 
-# Optional: Save unmatched to CSV
- write_csv(unmatched, "unmatched_records.csv")
+# Optional: Save surveys_unmatched to CSV
+ write_csv(surveys_unmatched, "surveys_unmatched_records.csv")
+ 
+ #save surveys_matched to csv
+ write_csv(surveys_matched, "surveys_matched_records.csv")
+ 
+ 
+ #--------------------------------------------------------------------
+ #Match surveys_unmatched Against Census Archives
+ #---------------------------------------------------------------------
+ 
+ cat("Checking surveys_unmatched records against post_census_2022_building...\n")
+ 
+ # Query post_census_2022_building
+ census_query <- "SELECT interview__key, ed_2022, blk_newn_2022, bldg_newn FROM post_census_2022_building;"
+ census_data <- dbGetQuery(conn,census_query) %>%
+   mutate(
+     concat_key=paste(interview__key, ed_2022, blk_newn_2022,bldg_newn, sep="-")
+   )
+ 
+ # Match with surveys_unmatched from surveys against post_census
+ post_census_matched<- surveys_unmatched %>%
+   filter(concat_key %in% census_data$concat_key)
+ 
+ still_unmatched<-surveys_unmatched %>%
+   filter
+ 
+cat("post_census_2022_building matches: ", nrow(post_census_matched), "\n")
+cat("Still unmatched after post census check: ", nrow(still_unmatched), "\n")
+
+#save second level matches to CSV
+write_csv(post_census_matched, "post_census_matched_records.csv")
+
+#save still unmatched
+write_csv(still_unmatched,"still_unmatched.csv")
+
+
+#----------------------------------------------------------
+# Match with surveys_unmatched from surveys against mics7 
+#----------------------------------------------------------
+
+
+# Query mics7 building
+mics7_query <- "SELECT interview__key, ed_2022, blk_newn_2023, bldg_newn FROM mics7_building;"
+mics7_data <- dbGetQuery(conn,mics7_query) %>%
+  mutate(
+    concat_key=paste(interview__key, ed_2022, blk_newn_2023,bldg_newn, sep="-")
+  )
+
+mics7_matched<- surveys_unmatched %>%
+  filter(concat_key %in% mics7_data$concat_key)
+
+still_unmatched_mics7<-surveys_unmatched %>%
+  filter
+
+cat("mics7_matched records: ", nrow(mics7_matched), "\n")
+cat("still_unmatched_mics7 records: ", nrow(still_unmatched_mics7), "\n")
+
+# Save still_unmatched_mics7 to CSV
+write_csv(still_unmatched, "still_unmatched_mics7_records.csv")
+
+#save mics7_matched to csv
+write_csv(mics7_matched, "mics7_matched_records.csv")
+
+#---------------------------------------------------------
+# Match with surveys_unmatched from surveys against pes 
+#---------------------------------------------------------
+
+# Query pes building
+pes_query <- "SELECT interview__key, ed_2020, blk_newn_2023, bldg_newn FROM pes_building_2020;"
+pes_data <- dbGetQuery(conn,pes_query) %>%
+  mutate(
+    concat_key=paste(interview__key, ed_2020, blk_newn_2023,bldg_newn, sep="-")
+  )
+
+pes_matched<- surveys_unmatched %>%
+  filter(concat_key %in% pes_data$concat_key)
+
+still_unmatched_pes<-surveys_unmatched %>%
+  filter
+
+cat("pes_matched records: ", nrow(pes_matched), "\n")
+cat("still_unmatched_pes records: ", nrow(still_unmatched_pes), "\n")
+
+# Save still_unmatched_pes to CSV
+write_csv(still_unmatched_pes, "still_unmatched_pes_records.csv")
+
+#save surveys_matched to csv
+write_csv(pes_matched, "pes_matched_records.csv")
+
+
 
 # ------------------------------
 # Update Sampled Flag in DB
@@ -122,11 +215,7 @@ SET sampled='1'
 WHERE interview__key=$1 AND ed_2022=$2;
 ")
 
-# update_query <- glue(
-#                      UPDATE {db_table}
-#                      SET sampled = '1'
-#                      WHERE interview__key = $1 AND ed_2022 = $2;
-#                      ")
+
 
 
 updated_rows <- list()  # For tracking successful updates
@@ -138,8 +227,8 @@ for (i in 1:nrow(matched)) {
   tryCatch({
     dbExecute(conn, update_query, params = list(row$interview__key, row$ed_2022))
     
-    # ✅ Log success message
-    cat(glue("✅ Updated: interview__key = {row$interview__key}, ed_2022 = {row$ed_2022}\n"))
+    # ✅ Add row to tracking list
+    updated_rows[[length(updated_rows)+1]]<-row
     
   }, error = function(e) {
     cat(glue("❌ Error updating row {i}: {e$message}\n"))
@@ -152,12 +241,10 @@ dbCommit(conn)
 if (length(updated_rows) > 0) {
   updated_df <- dplyr::bind_rows(updated_rows)
   readr::write_csv(updated_df, "updated_records.csv")
-  cat(glue("✅ Total updated records: {nrow(updated_df)}\n"))
+  cat(glue("✅ Total updated records: {nrow(updated_df)}\ n"))
 } else {
   cat("⚠️ No records were successfully updated.\n")
 }
-
-
 
 
 
