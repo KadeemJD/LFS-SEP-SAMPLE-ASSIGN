@@ -38,7 +38,9 @@ sav_data <- sav_data %>%
   mutate(
     concat_key = paste(interview__key, ed_2022, block, building_number, sep = "-")
   ) %>%
-  filter(!ed_2022 %in% c("19-072-00", "19-070-00", "29-075-10"))  # Exclude Mennonite communities
+  filter(!ed_2022 %in% c("19-070-00"))  # Exclude Mennonite communities
+
+sav_data <- sav_data %>% distinct(concat_key, .keep_all=TRUE)
 
 cat("Unique records in SAV file: ", n_distinct(sav_data$concat_key), "\n")
 
@@ -90,11 +92,58 @@ surveys_unmatched <- sav_data %>%
 cat("surveys_matched records: ", nrow(surveys_matched), "\n")
 cat("surveys_unmatched records: ", nrow(surveys_unmatched), "\n")
 
+# ------------------------------------------------------------------
+# Match surveys_unmatched against post_census_2022_building
+# ------------------------------------------------------------------
+cat("Checking post_census_2022_building...\n")
+census_query <- "SELECT interview__key, ed_2022, blk_newn_2022, bldg_newn FROM post_census_2022_building;"
+census_data <- dbGetQuery(conn, census_query) %>%
+  mutate(concat_key = paste(interview__key, ed_2022, blk_newn_2022, bldg_newn, sep = "-"))
+
+post_census_matched <- surveys_unmatched %>% filter(concat_key %in% census_data$concat_key)
+surveys_unmatched <- surveys_unmatched %>% filter(!concat_key %in% census_data$concat_key)
+
+cat("post_census_matched records: ", nrow(post_census_matched), "\n")
+cat("still unmatched after census check: ", nrow(surveys_unmatched), "\n")
+
+# ------------------------------------------------------------------
+# Match against mics7_building
+# ------------------------------------------------------------------
+cat("Checking mics7_building...\n")
+mics7_query <- "SELECT interview__key, ed_2022, blk_newn_2023, bldg_newn FROM mics7_building;"
+mics7_data <- dbGetQuery(conn, mics7_query) %>%
+  mutate(concat_key = paste(interview__key, ed_2022, blk_newn_2023, bldg_newn, sep = "-"))
+
+mics7_matched <- surveys_unmatched %>% filter(concat_key %in% mics7_data$concat_key)
+surveys_unmatched <- surveys_unmatched %>% filter(!concat_key %in% mics7_data$concat_key)
+
+cat("mics7_matched records: ", nrow(mics7_matched), "\n")
+cat("still unmatched after mics7 check: ", nrow(surveys_unmatched), "\n")
+
+# ------------------------------------------------------------------
+# Match against pes_building_2020
+# ------------------------------------------------------------------
+cat("Checking pes_building_2020...\n")
+pes_query <- "SELECT interview__key, ed_2020, blk_newn_2023, bldg_newn FROM pes_building_2020;"
+pes_data <- dbGetQuery(conn, pes_query) %>%
+  mutate(concat_key = paste(interview__key, ed_2020, blk_newn_2023, bldg_newn, sep = "-"))
+
+pes_matched <- surveys_unmatched %>% filter(concat_key %in% pes_data$concat_key)
+surveys_unmatched <- surveys_unmatched %>% filter(!concat_key %in% pes_data$concat_key)
+
+cat("pes_matched records: ", nrow(pes_matched), "\n")
+cat("still unmatched after pes check: ", nrow(surveys_unmatched), "\n")
+
+# Combine all matched
+all_matched <- bind_rows(surveys_matched, post_census_matched, mics7_matched, pes_matched)
+
+# Save final unmatched to CSV
+write_csv(surveys_unmatched, "final_unmatched_records.csv")
+
 # Only proceed if all SAV records matched
 if (nrow(surveys_unmatched) == 0) {
   
-  # Save matches
-  write_csv(surveys_matched, "surveys_matched_records.csv")
+  write_csv(all_matched, "all_matched_records.csv")
   
   # ------------------------------
   # Update Sampled Flag in DB
@@ -103,11 +152,10 @@ if (nrow(surveys_unmatched) == 0) {
   
   update_query <- glue("\n  UPDATE {db_table}\n  SET sampled='1'\n  WHERE interview__key=$1 AND ed_2022=$2;\n  ")
   
-  updated_rows <- list()  # For tracking successful updates
-  
+  updated_rows <- list()
   dbBegin(conn)
-  for (i in 1:nrow(surveys_matched)) {
-    row <- surveys_matched[i, ]
+  for (i in 1:nrow(all_matched)) {
+    row <- all_matched[i, ]
     tryCatch({
       dbExecute(conn, update_query, params = list(row$interview__key, row$ed_2022))
       updated_rows[[length(updated_rows)+1]] <- row
@@ -126,8 +174,7 @@ if (nrow(surveys_unmatched) == 0) {
   }
   
 } else {
-  cat("⚠️ Script aborted. There are unmatched SAV records. No updates made.\n")
-  write_csv(surveys_unmatched, "surveys_unmatched_records.csv")
+  cat("⚠️ Script aborted. There are unmatched SAV records after checking all tables. No updates made.\n")
 }
 
 # ------------------------------
