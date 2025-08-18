@@ -41,9 +41,11 @@ sav_data <- read_sav("SEPT2025SAMPLE.sav")
 
 # Rename column for consistency
 sav_data <- sav_data %>%
-  rename(ed_2022 = ed) %>%
+  rename(ed_2022 = ed,
+         blk_newn_2022=block,
+         bldg_newn=building_number) %>%
   mutate(
-    concat_key = paste(interview__key, ed_2022, block, building_number, sep = "-")
+    concat_key = paste(interview__key, ed_2022, blk_newn_2022, bldg_newn, sep = "-")
   ) %>%
   filter(!ed_2022 %in% c("19-070-00"))  # Exclude Mennonite communities
 
@@ -96,7 +98,7 @@ conn_census <- tryCatch({
 
 cat("Resetting sampled flags to NULL...\n")
 reset_query <- glue("UPDATE {db_table} SET sampled = NULL;")
-dbExecute(conn, reset_query)
+dbExecute(conn_surveys, reset_query)
 
 # ------------------------------
 # Read from Database
@@ -131,39 +133,24 @@ census_query <- "SELECT interview__key, ed_2022, blk_newn_2022, bldg_newn FROM p
 census_data <- dbGetQuery(conn_census, census_query) %>%
   mutate(concat_key = paste(interview__key, ed_2022, blk_newn_2022, bldg_newn, sep = "-"))
 
-post_census_matched <- surveys_unmatched %>% filter(concat_key %in% census_data$concat_key)
+post_census_matched <- census_data %>% filter(concat_key %in% surveys_unmatched$concat_key)
 surveys_unmatched <- surveys_unmatched %>% filter(!concat_key %in% census_data$concat_key)
 
 cat("post_census_matched records: ", nrow(post_census_matched), "\n")
 cat("still unmatched after census check: ", nrow(surveys_unmatched), "\n")
 
-# # ------------------------------------------------------------------
-# # Match against mics7_building
-# # ------------------------------------------------------------------
-# cat("Checking mics7_building...\n")
-# mics7_query <- "SELECT interview__key, ed_2022, blk_newn_2023, bldg_newn FROM mics7_building;"
-# mics7_data <- dbGetQuery(conn, mics7_query) %>%
-#   mutate(concat_key = paste(interview__key, ed_2022, blk_newn_2023, bldg_newn, sep = "-"))
-# 
-# mics7_matched <- surveys_unmatched %>% filter(concat_key %in% mics7_data$concat_key)
-# surveys_unmatched <- surveys_unmatched %>% filter(!concat_key %in% mics7_data$concat_key)
-# 
-# cat("mics7_matched records: ", nrow(mics7_matched), "\n")
-# cat("still unmatched after mics7 check: ", nrow(surveys_unmatched), "\n")
+write_csv(post_census_matched, "post_census_matched_records.csv")
 
-# # ------------------------------------------------------------------
-# # Match against pes_building_2020
-# # ------------------------------------------------------------------
-# cat("Checking pes_building_2020...\n")
-# pes_query <- "SELECT interview__key, ed_2020, blk_newn_2023, bldg_newn FROM pes_building_2020;"
-# pes_data <- dbGetQuery(conn, pes_query) %>%
-#   mutate(concat_key = paste(interview__key, ed_2020, blk_newn_2023, bldg_newn, sep = "-"))
-# 
-# pes_matched <- surveys_unmatched %>% filter(concat_key %in% pes_data$concat_key)
-# surveys_unmatched <- surveys_unmatched %>% filter(!concat_key %in% pes_data$concat_key)
-# 
-# cat("pes_matched records: ", nrow(pes_matched), "\n")
-# cat("still unmatched after pes check: ", nrow(surveys_unmatched), "\n")
+
+# Making sure that fields are numeric and getting rid of leading zeros
+surveys_matched <- surveys_matched %>%
+  mutate(blk_newn_2022 = as.numeric(blk_newn_2022),
+         bldg_newn = as.numeric(bldg_newn))
+
+post_census_matched <- post_census_matched %>%
+  mutate(blk_newn_2022 = as.numeric(blk_newn_2022),
+         bldg_newn = as.numeric(bldg_newn))
+
 
 # Combine all matched
 all_matched <- bind_rows(surveys_matched, post_census_matched) #mics7_matched, pes_matched)
@@ -176,9 +163,9 @@ if (nrow(surveys_unmatched) == 0) {
   
   write_csv(all_matched, "all_matched_records.csv")
   
-  # ------------------------------
-  # Update Sampled Flag in DB
-  # ------------------------------
+  # --------------------------------------------------------
+  # Update Sampled Flag in DB Initial from Surveys database
+  # --------------------------------------------------------
   cat("Updating matched records...\n")
   
   update_query <- glue("\n  UPDATE {db_table}\n  SET sampled='1'\n  WHERE interview__key=$1 AND ed_2022=$2;\n  ")
@@ -207,6 +194,75 @@ if (nrow(surveys_unmatched) == 0) {
 } else {
   cat("⚠️ Script aborted. There are unmatched SAV records after checking all tables. No updates made.\n")
 }
+
+
+# ------------------------------
+# Update from post_census_matched → back to test2 using 3-key match
+# ------------------------------
+cat("Linking post_census_matched back to test2 for remaining updates...\n")
+
+# Reload test2.sde.lfs_general_building with all relevant columns
+test2_query <- glue("SELECT interview__key, ed_2022, blk_newn_2022, bldg_newn FROM {db_table};")
+test2_data <- dbGetQuery(conn_surveys, test2_query)
+
+# Build match key for test2 and post_census
+test2_data <- test2_data %>%
+  mutate(three_key = paste(ed_2022, blk_newn_2022, bldg_newn, sep = "-"))
+
+post_census_matched <- post_census_matched %>%
+  mutate(three_key = paste(ed_2022, blk_newn_2022, bldg_newn, sep = "-"))
+
+# Join back using 3-key
+back_matched <- inner_join(
+  post_census_matched,
+  test2_data,
+  by = "three_key"
+) %>% select(interview__key, ed_2022)
+
+cat("Records matched back to test2 using 3-key match: ", nrow(back_matched), "\n")
+
+# ---------------------------------
+# Update Sampled Flag in test2 DB
+# ---------------------------------
+cat("🔁 Updating test2.sde.lfs_general_building for these remaining matches...\n")
+
+update_query_3key <- glue("
+  UPDATE {db_table}
+  SET sampled = '1'
+  WHERE interview__key = $1 AND ed_2022 = $2;
+")
+
+updated_rows_3key <- list()
+dbBegin(conn_surveys)
+for (i in 1:nrow(back_matched)) {
+  row <- back_matched[i, ]
+  tryCatch({
+    dbExecute(conn_surveys, update_query_3key, params = list(row$interview__key, row$ed_2022))
+    updated_rows_3key[[length(updated_rows_3key) + 1]] <- row
+  }, error = function(e) {
+    cat(glue("❌ Error updating row {i}: {e$message}\n"))
+  })
+}
+dbCommit(conn_surveys)
+
+# Save CSV
+if (length(updated_rows_3key) > 0) {
+  updated_df_3key <- bind_rows(updated_rows_3key)
+  write_csv(updated_df_3key, "updated_from_census_backmatch.csv")
+  cat(glue("✅ Additional updates applied using 3-key backmatch: {nrow(updated_df_3key)}\n"))
+} else {
+  cat("⚠️ No additional records were updated using 3-key backmatch.\n")
+}
+
+
+# ------------------------------
+# Final verification
+# ------------------------------
+cat("✅ Verifying final sample count in test2...\n")
+final_check <- dbGetQuery(conn_surveys, glue("SELECT COUNT(*) FROM {db_table} WHERE sampled = '1';"))
+cat(glue("✅ Final count of sampled buildings in test2: {final_check[[1]]} (should be 2967)\n"))
+
+
 
 # ------------------------------
 # Clean up
