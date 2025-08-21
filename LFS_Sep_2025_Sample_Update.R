@@ -214,7 +214,7 @@ post_census_matched <- post_census_matched %>%
   mutate(post_census_matched, bldg_newn=as.double(bldg_newn))
 
 #Combine all matched
-all_matched <- bind_rows(surveys_matched, post_census_matched) 
+all_matched <- bind_rows(surveys_matched)
                  
 
 
@@ -276,8 +276,8 @@ cat(message, "\n")
 #░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░#
 
 dbDisconnect(conn_surveys)
-dbDisconnect(conn_census)
-cat("Disconnected from both databases.\n")
+#dbDisconnect(conn_census) #uncomment when we actually connect to census archives database
+cat("Disconnected from database(s).\n")
 
 
 
