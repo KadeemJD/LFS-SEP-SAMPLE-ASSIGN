@@ -118,9 +118,9 @@ conn_surveys <- tryCatch({
 
 #🔓~~Uncomment the code below when you need to clear all the records from the column "sampled"~~🔓#
 
-# cat("Resetting sampled flags to NULL...\n")
-# reset_query <- glue("UPDATE {db_table} SET sampled = NULL;")
-# dbExecute(conn_surveys, reset_query)
+cat("Resetting sampled flags to NULL...\n")
+reset_query <- glue("UPDATE {db_table} SET sampled = NULL;")
+dbExecute(conn_surveys, reset_query)
 
 #░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░#
 #08 Read from Database (aka test2)
@@ -231,17 +231,22 @@ if (nrow(surveys_unmatched) == 0) {
   
   update_query <- glue("\n  UPDATE {db_table}\n  SET sampled='1'\n  WHERE interview__key=$1 AND ed_2022=$2;\n  ")
   
-  updated_rows <- list()
-  dbBegin(conn_surveys)
-  for (i in 1:nrow(all_matched)) {
-    row <- all_matched[i, ]
-    tryCatch({
-      dbExecute(conn_surveys, update_query, params = list(row$interview__key, row$ed_2022))
-      updated_rows[[length(updated_rows)+1]] <- row
-    }, error = function(e) {
-      cat(glue("❌ Error updating row {i}: {e$message}\n"))
-    })
-  }
+ updated_rows <- list()
+n <- nrow(all_matched)
+pb <- txtProgressBar(min = 0, max = n, style = 3)  # create progress bar
+
+dbBegin(conn_surveys)
+for (i in 1:n) {
+  row <- all_matched[i, ]
+  tryCatch({
+    dbExecute(conn_surveys, update_query, params = list(row$interview__key, row$ed_2022))
+    updated_rows[[length(updated_rows)+1]] <- row
+  }, error = function(e) {
+    cat(glue("❌ Error updating row {i}: {e$message}\n"))
+  })
+  setTxtProgressBar(pb, i)  # update progress bar
+}
+close(pb)  # close the bar
   dbCommit(conn_surveys)
   
   if (length(updated_rows) > 0) {
