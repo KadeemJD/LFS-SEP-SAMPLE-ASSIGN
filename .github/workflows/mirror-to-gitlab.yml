@@ -1,0 +1,25 @@
+name: Mirror to GitLab
+
+on:
+  push:
+    branches:
+      - main  # or whatever branch you want to sync
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v3
+
+      - name: Push to GitLab
+        env:
+          GITLAB_URL: https://gitlab.com/<kdaniels>/<LFS-SEP-SAMPLE-ASSIGN>.git
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          git config --global user.name "Kadeem Daniels"
+          git config --global user.email "kdaniels@mail.sib.org.bz"
+
+          git remote add gitlab https://oauth2:${GITLAB_TOKEN}@gitlab.com/kdaniels/LFS-SEP-SAMPLE-ASSIGN.git
+          git push --mirror gitlab
